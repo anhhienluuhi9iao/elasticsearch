@@ -49,6 +49,7 @@ import org.elasticsearch.xpack.core.ml.utils.QueryProvider;
 import org.elasticsearch.xpack.core.ml.utils.RuntimeMappingsValidator;
 import org.elasticsearch.xpack.core.ml.utils.ToXContentParams;
 import org.elasticsearch.xpack.core.ml.utils.XContentObjectTransformer;
+import org.elasticsearch.xpack.core.security.cloud.PersistedCloudCredential;
 import org.elasticsearch.xpack.core.security.xcontent.XContentUtils;
 
 import java.io.IOException;
@@ -120,7 +121,7 @@ public class DatafeedConfig implements SimpleDiffable<DatafeedConfig>, ToXConten
     // private static final TransportVersion DATAFEED_PROJECT_ROUTING = TransportVersion.fromName("datafeed_project_routing");
     static final TransportVersion DATAFEED_PROJECT_ROUTING = TransportVersion.fromName("index_limit_exceeded_exception");
 
-    private static final TransportVersion DATAFEED_CLOUD_INTERNAL_API_KEY = TransportVersion.fromName("datafeed_cloud_internal_api_key");
+    static final TransportVersion DATAFEED_CLOUD_INTERNAL_CREDENTIAL = TransportVersion.fromName("datafeed_cloud_internal_credential");
 
     // Accessing `Job.ID` here causes an NPE in tests as a DatafeedConfig parser is referenced in the Job parser
     public static final ParseField JOB_ID = new ParseField("job_id");
@@ -141,7 +142,7 @@ public class DatafeedConfig implements SimpleDiffable<DatafeedConfig>, ToXConten
     public static final ParseField MAX_EMPTY_SEARCHES = new ParseField("max_empty_searches");
     public static final ParseField INDICES_OPTIONS = new ParseField("indices_options");
     public static final ParseField PROJECT_ROUTING = new ParseField("project_routing");
-    public static final ParseField CLOUD_INTERNAL_API_KEY = new ParseField("cloud_internal_api_key");
+    public static final ParseField CLOUD_INTERNAL_CREDENTIAL = new ParseField("cloud_internal_credential");
 
     // These parsers follow the pattern that metadata is parsed leniently (to allow for enhancements), whilst config is parsed strictly
     public static final ObjectParser<Builder, Void> LENIENT_PARSER = createParser(true);
@@ -228,8 +229,8 @@ public class DatafeedConfig implements SimpleDiffable<DatafeedConfig>, ToXConten
             // Headers are not parsed by the strict (config) parser, so headers supplied in the _body_ of a REST request will be rejected.
             // (For config, headers are explicitly transferred from the auth headers by code in the put/update datafeed actions.)
             parser.declareObject(Builder::setHeaders, (p, c) -> p.mapStrings(), HEADERS);
-            // cloud_internal_api_key is only parsed from internal storage (lenient parser), not from REST requests.
-            parser.declareString(Builder::setCloudInternalApiKey, CLOUD_INTERNAL_API_KEY);
+            // cloud_internal_credential is only parsed from internal storage (lenient parser), not from REST requests.
+            parser.declareObject(Builder::setCloudInternalCredential, (p, c) -> PersistedCloudCredential.fromXContent(p), CLOUD_INTERNAL_CREDENTIAL);
         }
         parser.declareObject(
             Builder::setDelayedDataCheckConfig,
@@ -274,7 +275,7 @@ public class DatafeedConfig implements SimpleDiffable<DatafeedConfig>, ToXConten
     @Nullable
     private final String projectRouting;
     @Nullable
-    private final String cloudInternalApiKey;
+    private final PersistedCloudCredential cloudInternalCredential;
 
     private DatafeedConfig(
         String id,
@@ -293,7 +294,7 @@ public class DatafeedConfig implements SimpleDiffable<DatafeedConfig>, ToXConten
         IndicesOptions indicesOptions,
         Map<String, Object> runtimeMappings,
         String projectRouting,
-        String cloudInternalApiKey
+        PersistedCloudCredential cloudInternalCredential
     ) {
         this.id = id;
         this.jobId = jobId;
@@ -311,7 +312,7 @@ public class DatafeedConfig implements SimpleDiffable<DatafeedConfig>, ToXConten
         this.indicesOptions = ExceptionsHelper.requireNonNull(indicesOptions, INDICES_OPTIONS);
         this.runtimeMappings = Collections.unmodifiableMap(runtimeMappings);
         this.projectRouting = projectRouting;
-        this.cloudInternalApiKey = cloudInternalApiKey;
+        this.cloudInternalCredential = cloudInternalCredential;
     }
 
     public DatafeedConfig(StreamInput in) throws IOException {
@@ -346,10 +347,10 @@ public class DatafeedConfig implements SimpleDiffable<DatafeedConfig>, ToXConten
         } else {
             this.projectRouting = null;
         }
-        if (in.getTransportVersion().supports(DATAFEED_CLOUD_INTERNAL_API_KEY)) {
-            this.cloudInternalApiKey = in.readOptionalString();
+        if (in.getTransportVersion().supports(DATAFEED_CLOUD_INTERNAL_CREDENTIAL)) {
+            this.cloudInternalCredential = in.readOptionalWriteable(PersistedCloudCredential::new);
         } else {
-            this.cloudInternalApiKey = null;
+            this.cloudInternalCredential = null;
         }
     }
 
@@ -615,8 +616,8 @@ public class DatafeedConfig implements SimpleDiffable<DatafeedConfig>, ToXConten
     }
 
     @Nullable
-    public String getCloudInternalApiKey() {
-        return cloudInternalApiKey;
+    public PersistedCloudCredential getCloudInternalCredential() {
+        return cloudInternalCredential;
     }
 
     @Override
@@ -653,8 +654,8 @@ public class DatafeedConfig implements SimpleDiffable<DatafeedConfig>, ToXConten
         if (out.getTransportVersion().supports(DATAFEED_PROJECT_ROUTING)) {
             out.writeOptionalString(projectRouting);
         }
-        if (out.getTransportVersion().supports(DATAFEED_CLOUD_INTERNAL_API_KEY)) {
-            out.writeOptionalString(cloudInternalApiKey);
+        if (out.getTransportVersion().supports(DATAFEED_CLOUD_INTERNAL_CREDENTIAL)) {
+            out.writeOptionalWriteable(cloudInternalCredential);
         }
     }
 
@@ -726,8 +727,9 @@ public class DatafeedConfig implements SimpleDiffable<DatafeedConfig>, ToXConten
         if (projectRouting != null) {
             builder.field(PROJECT_ROUTING.getPreferredName(), projectRouting);
         }
-        if (forInternalStorage && cloudInternalApiKey != null) {
-            builder.field(CLOUD_INTERNAL_API_KEY.getPreferredName(), cloudInternalApiKey);
+        if (forInternalStorage && cloudInternalCredential != null) {
+            builder.field(CLOUD_INTERNAL_CREDENTIAL.getPreferredName());
+            cloudInternalCredential.toXContent(builder, params);
         }
         builder.endObject();
         return builder;
@@ -791,7 +793,7 @@ public class DatafeedConfig implements SimpleDiffable<DatafeedConfig>, ToXConten
             && Objects.equals(this.indicesOptions, that.indicesOptions)
             && Objects.equals(this.runtimeMappings, that.runtimeMappings)
             && Objects.equals(this.projectRouting, that.projectRouting)
-            && Objects.equals(this.cloudInternalApiKey, that.cloudInternalApiKey);
+            && Objects.equals(this.cloudInternalCredential, that.cloudInternalCredential);
     }
 
     @Override
@@ -813,7 +815,7 @@ public class DatafeedConfig implements SimpleDiffable<DatafeedConfig>, ToXConten
             indicesOptions,
             runtimeMappings,
             projectRouting,
-            cloudInternalApiKey
+            cloudInternalCredential
         );
     }
 
@@ -888,7 +890,7 @@ public class DatafeedConfig implements SimpleDiffable<DatafeedConfig>, ToXConten
         private IndicesOptions indicesOptions;
         private Map<String, Object> runtimeMappings = Collections.emptyMap();
         private String projectRouting;
-        private String cloudInternalApiKey;
+        private PersistedCloudCredential cloudInternalCredential;
 
         public Builder() {}
 
@@ -915,7 +917,7 @@ public class DatafeedConfig implements SimpleDiffable<DatafeedConfig>, ToXConten
             this.indicesOptions = config.indicesOptions;
             this.runtimeMappings = new HashMap<>(config.runtimeMappings);
             this.projectRouting = config.projectRouting;
-            this.cloudInternalApiKey = config.cloudInternalApiKey;
+            this.cloudInternalCredential = config.cloudInternalCredential;
         }
 
         public Builder(StreamInput in) throws IOException {
@@ -950,8 +952,8 @@ public class DatafeedConfig implements SimpleDiffable<DatafeedConfig>, ToXConten
             if (in.getTransportVersion().supports(DATAFEED_PROJECT_ROUTING)) {
                 projectRouting = in.readOptionalString();
             }
-            if (in.getTransportVersion().supports(DATAFEED_CLOUD_INTERNAL_API_KEY)) {
-                cloudInternalApiKey = in.readOptionalString();
+            if (in.getTransportVersion().supports(DATAFEED_CLOUD_INTERNAL_CREDENTIAL)) {
+                cloudInternalCredential = in.readOptionalWriteable(PersistedCloudCredential::new);
             }
         }
 
@@ -992,8 +994,8 @@ public class DatafeedConfig implements SimpleDiffable<DatafeedConfig>, ToXConten
             if (out.getTransportVersion().supports(DATAFEED_PROJECT_ROUTING)) {
                 out.writeOptionalString(projectRouting);
             }
-            if (out.getTransportVersion().supports(DATAFEED_CLOUD_INTERNAL_API_KEY)) {
-                out.writeOptionalString(cloudInternalApiKey);
+            if (out.getTransportVersion().supports(DATAFEED_CLOUD_INTERNAL_CREDENTIAL)) {
+                out.writeOptionalWriteable(cloudInternalCredential);
             }
         }
 
@@ -1018,7 +1020,7 @@ public class DatafeedConfig implements SimpleDiffable<DatafeedConfig>, ToXConten
                 && Objects.equals(indicesOptions, builder.indicesOptions)
                 && Objects.equals(runtimeMappings, builder.runtimeMappings)
                 && Objects.equals(projectRouting, builder.projectRouting)
-                && Objects.equals(cloudInternalApiKey, builder.cloudInternalApiKey);
+                && Objects.equals(cloudInternalCredential, builder.cloudInternalCredential);
         }
 
         @Override
@@ -1040,7 +1042,7 @@ public class DatafeedConfig implements SimpleDiffable<DatafeedConfig>, ToXConten
                 indicesOptions,
                 runtimeMappings,
                 projectRouting,
-                cloudInternalApiKey
+                cloudInternalCredential
             );
         }
 
@@ -1192,14 +1194,14 @@ public class DatafeedConfig implements SimpleDiffable<DatafeedConfig>, ToXConten
             return projectRouting;
         }
 
-        public Builder setCloudInternalApiKey(String cloudInternalApiKey) {
-            this.cloudInternalApiKey = cloudInternalApiKey;
+        public Builder setCloudInternalCredential(PersistedCloudCredential cloudInternalCredential) {
+            this.cloudInternalCredential = cloudInternalCredential;
             return this;
         }
 
         @Nullable
-        public String getCloudInternalApiKey() {
-            return cloudInternalApiKey;
+        public PersistedCloudCredential getCloudInternalCredential() {
+            return cloudInternalCredential;
         }
 
         public DatafeedConfig build() {
@@ -1254,7 +1256,7 @@ public class DatafeedConfig implements SimpleDiffable<DatafeedConfig>, ToXConten
                 indicesOptions,
                 runtimeMappings,
                 projectRouting,
-                cloudInternalApiKey
+                cloudInternalCredential
             );
         }
 
