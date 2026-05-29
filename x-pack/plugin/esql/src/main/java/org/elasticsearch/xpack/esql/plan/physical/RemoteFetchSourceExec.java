@@ -23,7 +23,8 @@ import java.util.Objects;
  * Leaf source used to compile remote-fetch post-fetch pushdown fragments.
  * <p>
  * The final output attribute is the synthetic position-mapping attribute. It maps each row that survives pushdown back to its
- * original input position and must stay aligned with the final block produced by the remote-fetch pushdown compiler.
+ * original input position and must stay aligned with the final block produced by the remote-fetch pushdown compiler
+ * ({@code RemoteFetchPushdownCompiler}).
  */
 public class RemoteFetchSourceExec extends LeafExec {
     public static final NamedWriteableRegistry.Entry ENTRY = new NamedWriteableRegistry.Entry(
